@@ -45,6 +45,7 @@ def ensure_splits(cfg: dict, repo_root: Path, data_root: Path, force: bool) -> N
     write_splits(
         pairs,
         split_dir,
+        data_root,
         float(cfg["train_ratio"]),
         float(cfg["val_ratio"]),
         float(cfg["test_ratio"]),
@@ -158,8 +159,11 @@ def main() -> None:
         height=h,
         width=w,
         augment=bool(cfg.get("augment_train", True)),
+        path_anchor=data_root,
     )
-    val_ds = BrainTumorDataset(val_entries, height=h, width=w, augment=False)
+    val_ds = BrainTumorDataset(
+        val_entries, height=h, width=w, augment=False, path_anchor=data_root
+    )
 
     loader_kw = dict(
         batch_size=int(cfg["batch_size"]),

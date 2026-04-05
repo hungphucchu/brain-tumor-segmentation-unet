@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import yaml
 
+from .data_files import resolve_effective_data_root
 from .dataset import BrainTumorDataset, load_split_entries
 from .metrics import dice_iou_from_logits
 from .model import UNet
@@ -105,11 +106,21 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, default=Path("checkpoints/best.pt"))
     parser.add_argument("--split", type=str, default="test", choices=("train", "val", "test"))
     parser.add_argument("--max-overlays", type=int, default=20)
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        help="Must match training data_root for path resolution (overrides config).",
+    )
     args = parser.parse_args()
 
     repo_root = Path.cwd()
     cfg = load_config(args.config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    data_root, _picked = resolve_effective_data_root(
+        repo_root, str(cfg["data_root"]), args.data_root
+    )
 
     entries = load_split_entries(repo_root / cfg["split_dir"], args.split)
     ds = BrainTumorDataset(
@@ -117,6 +128,7 @@ def main() -> None:
         height=int(cfg["img_height"]),
         width=int(cfg["img_width"]),
         augment=False,
+        path_anchor=data_root,
     )
     loader = DataLoader(
         ds,

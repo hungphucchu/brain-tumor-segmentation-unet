@@ -72,7 +72,11 @@ Run from the repository root.
    python -m src.train --config configs/default.yaml
    ```
 
-   Checkpoints: `checkpoints/best.pt` (best validation Dice). Optional: `--force-splits` to regenerate `splits.json`.
+   Checkpoints: `checkpoints/best.pt` (best validation Dice).
+
+   **HPC / second machine:** `data/splits/splits.json` stores paths **relative** to `data/raw` so clones stay portable. If you still see `FileNotFoundError` pointing at another computer’s path, regenerate splits on this host: `python -m src.train --config configs/default.yaml --force-splits`.
+
+   **CUDA “driver too old”:** Install a PyTorch build that matches the cluster’s CUDA/driver (see [pytorch.org](https://pytorch.org)), or training falls back to CPU if `torch.cuda.is_available()` is false. You can set `amp: false` in `configs/default.yaml` when on CPU.
 
 4. **Evaluate** on test set and save overlay PNGs:
 

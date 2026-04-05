@@ -10,19 +10,53 @@ import tifffile
 import torch
 from torch.utils.data import Dataset
 
-from .data_files import _normalize_image, _normalize_mask, discover_pairs
+from .data_files import _iter_files, _normalize_image, _normalize_mask, discover_pairs
 
 __all__ = [
     "BrainTumorDataset",
     "discover_pairs",
     "load_split_entries",
+    "resolve_pair_paths",
     "write_splits",
 ]
+
+
+def resolve_pair_paths(image_s: str, mask_s: str, data_root: Path) -> tuple[Path, Path]:
+    """
+    Resolve image/mask paths for training on any machine.
+    - New splits: paths relative to data_root.
+    - Legacy splits: absolute paths from another host → locate by case folder + filename under data_root.
+    """
+    data_root = data_root.resolve()
+
+    def one(p: Path) -> Path:
+        if not p.is_absolute():
+            out = (data_root / p).resolve()
+            if out.is_file():
+                return out
+            return out
+        p = p.resolve()
+        if p.is_file():
+            return p
+        if len(p.parts) < 2:
+            return p
+        case_dir, fname = p.parts[-2], p.parts[-1]
+        for base in (data_root, data_root / "lgg_mri_kagglehub"):
+            cand = (base / case_dir / fname).resolve()
+            if cand.is_file():
+                return cand
+        for f in _iter_files(data_root):
+            if f.name == fname and f.parent.name == case_dir:
+                return f.resolve()
+        return p
+
+    return one(Path(image_s)), one(Path(mask_s))
 
 
 def write_splits(
     pairs: list[tuple[Path, Path, str]],
     split_dir: Path,
+    data_root: Path,
     train_ratio: float,
     val_ratio: float,
     test_ratio: float,
@@ -52,11 +86,20 @@ def write_splits(
     val_cases = set(cases[i_train:i_val_end])
     test_cases = set(cases[i_val_end:])
 
+    anchor = data_root.resolve()
+
+    def to_rel(p: Path) -> str:
+        p = p.resolve()
+        try:
+            return str(p.relative_to(anchor))
+        except ValueError:
+            return str(p)
+
     def collect(case_set: set[str]) -> list[dict[str, str]]:
         out: list[dict[str, str]] = []
         for c in sorted(case_set):
             for img, msk in by_case[c]:
-                out.append({"image": str(img), "mask": str(msk)})
+                out.append({"image": to_rel(img), "mask": to_rel(msk)})
         return sorted(out, key=lambda x: x["image"])
 
     payload = {
@@ -70,6 +113,8 @@ def write_splits(
             "val_cases": len(val_cases),
             "test_cases": len(test_cases),
             "split_indices": {"train_end": i_train, "val_end": i_val_end},
+            "path_format": "relative_to_data_root",
+            "data_root_used_for_split": str(anchor),
         },
     }
     path = split_dir / "splits.json"
@@ -93,19 +138,26 @@ class BrainTumorDataset(Dataset):
         height: int,
         width: int,
         augment: bool = False,
+        path_anchor: Path | None = None,
     ) -> None:
         self.entries = entries
         self.height = height
         self.width = width
         self.augment = augment
+        self.path_anchor = path_anchor.resolve() if path_anchor is not None else None
 
     def __len__(self) -> int:
         return len(self.entries)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         e = self.entries[idx]
-        img_path = Path(e["image"])
-        mask_path = Path(e["mask"])
+        if self.path_anchor is not None:
+            img_path, mask_path = resolve_pair_paths(
+                e["image"], e["mask"], self.path_anchor
+            )
+        else:
+            img_path = Path(e["image"])
+            mask_path = Path(e["mask"])
         image = tifffile.imread(str(img_path))
         mask = tifffile.imread(str(mask_path))
 
