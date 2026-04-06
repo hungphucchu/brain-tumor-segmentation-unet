@@ -50,9 +50,12 @@ Example batch script: [slurm/train_unet.slurm](slurm/train_unet.slurm). Adjust `
 
 ```bash
 mkdir -p logs
-export CONDA_ENV=/path/to/your/brain-tumor-unet   # or conda env name if using named env
+# Easiest on SLURM (no `conda init`): point to the env *folder* so the script uses that Python directly
+export CONDA_ENV="$HOME/.conda/envs/brain-tumor-unet"
 sbatch --chdir="$PWD" slurm/train_unet.slurm
 ```
+
+If you only have a **named** env, the script will `source …/conda.sh` then `conda activate` — ensure `module load anaconda3` works on your cluster, or set `CONDA_SH` / `CONDA_BASE` to where `etc/profile.d/conda.sh` lives.
 
 Resume after a time limit / OOM (when `checkpoints/last.pt` exists):
 

@@ -20,6 +20,12 @@ bce_weight: 0.5
 amp: true
 early_stopping_patience: 15
 
+# GPU throughput tweaks (fixed 256×256 → cudnn.benchmark is appropriate)
+cudnn_benchmark: true
+cuda_tf32: true
+torch_compile: false
+persistent_workers: true
+
 train_ratio: 0.8
 val_ratio: 0.1
 test_ratio: 0.1

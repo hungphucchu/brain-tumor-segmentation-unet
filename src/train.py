@@ -31,6 +31,13 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def _torch_major_version() -> int:
+    try:
+        return int(torch.__version__.split("+")[0].split(".")[0])
+    except (ValueError, IndexError):
+        return 0
+
+
 def ensure_splits(cfg: dict, repo_root: Path, data_root: Path, force: bool) -> None:
     split_dir = repo_root / cfg["split_dir"]
     split_file = split_dir / "splits.json"
@@ -63,8 +70,9 @@ def train_epoch(
     use_amp: bool,
 ) -> float:
     model.train()
+    if len(loader) == 0:
+        return 0.0
     total = 0.0
-    n = 0
     for batch in tqdm(loader, desc="train", leave=False):
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
@@ -81,9 +89,8 @@ def train_epoch(
             loss = criterion(logits, masks)
             loss.backward()
             optimizer.step()
-        total += float(loss.detach().cpu())
-        n += 1
-    return total / max(n, 1)
+        total += loss.detach().item()
+    return total / len(loader)
 
 
 @torch.no_grad()
@@ -94,9 +101,10 @@ def evaluate_epoch(
     use_amp: bool,
 ) -> tuple[float, float]:
     model.eval()
+    if len(loader) == 0:
+        return 0.0, 0.0
     dice_sum = 0.0
     iou_sum = 0.0
-    n = 0
     for batch in tqdm(loader, desc="val", leave=False):
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
@@ -106,10 +114,9 @@ def evaluate_epoch(
         else:
             logits = model(images)
         d, j = dice_iou_from_logits(logits, masks)
-        dice_sum += float(d.cpu())
-        iou_sum += float(j.cpu())
-        n += 1
-    return dice_sum / max(n, 1), iou_sum / max(n, 1)
+        dice_sum += d.item()
+        iou_sum += j.item()
+    return dice_sum / len(loader), iou_sum / len(loader)
 
 
 def _save_last_checkpoint(
@@ -179,7 +186,40 @@ def main() -> None:
 
     print(f"Training data root: {data_root} ({picked})")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cuda_ok = torch.cuda.is_available()
+    device = torch.device("cuda" if cuda_ok else "cpu")
+    print(
+        f"Device: {device}  |  torch.cuda.is_available()={cuda_ok}  "
+        f"|  torch {torch.__version__}"
+    )
+    if cuda_ok:
+        try:
+            gpu_name = torch.cuda.get_device_name(0)
+        except Exception:
+            gpu_name = "unknown"
+        print(
+            f"  CUDA runtime (PyTorch build): {torch.version.cuda}  "
+            f"|  GPU: {gpu_name}"
+        )
+        if bool(cfg.get("cudnn_benchmark", True)):
+            torch.backends.cudnn.benchmark = True
+        if bool(cfg.get("cuda_tf32", True)):
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        bits = []
+        if bool(cfg.get("cudnn_benchmark", True)):
+            bits.append("cudnn.benchmark")
+        if bool(cfg.get("cuda_tf32", True)):
+            bits.append("TF32 (Ampere+; small/no effect on V100)")
+        if bits:
+            print(f"  CUDA tuning: {', '.join(bits)}")
+    else:
+        print(
+            "  WARNING: Training on CPU — expect ~10–50× slower steps than a working GPU setup.\n"
+            "  If this node has a GPU, fix the NVIDIA driver vs PyTorch CUDA mismatch (see PyTorch install matrix).\n"
+            "  Bottlenecks on CPU: conv U-Net + per-sample TIFF decode/resize in DataLoader workers."
+        )
+
     h, w = int(cfg["img_height"]), int(cfg["img_width"])
 
     train_entries = load_split_entries(repo_root / cfg["split_dir"], "train")
@@ -196,13 +236,19 @@ def main() -> None:
         val_entries, height=h, width=w, augment=False, path_anchor=data_root
     )
 
+    nw = int(cfg["num_workers"])
     loader_kw = dict(
         batch_size=int(cfg["batch_size"]),
-        num_workers=int(cfg["num_workers"]),
+        num_workers=nw,
         pin_memory=device.type == "cuda",
+        persistent_workers=bool(cfg.get("persistent_workers", True)) and nw > 0,
     )
     train_loader = DataLoader(train_ds, shuffle=True, **loader_kw)
     val_loader = DataLoader(val_ds, shuffle=False, **loader_kw)
+    print(
+        f"Train batches/epoch: {len(train_loader)}  |  batch_size={cfg['batch_size']}  "
+        f"num_workers={cfg['num_workers']}  |  ~{len(train_ds)} train samples"
+    )
 
     model = UNet(in_channels=3, base=64).to(device)
     optimizer = torch.optim.Adam(
@@ -254,6 +300,19 @@ def main() -> None:
             f"Resuming from {resume_p} at epoch {start_epoch}/{epochs} "
             f"(best_val_dice so far={best_dice:.4f}, stale={stale})"
         )
+
+    if bool(cfg.get("torch_compile", False)) and device.type == "cuda":
+        if _torch_major_version() >= 2:
+            try:
+                model = torch.compile(model)
+                print(
+                    "torch.compile(model) on — first steps may be slower (graph capture); "
+                    "disable with torch_compile: false if unstable."
+                )
+            except Exception as err:
+                print(f"torch.compile skipped: {err}")
+        else:
+            print("torch.compile requires PyTorch 2.x; skipped.")
 
     for epoch in range(start_epoch, epochs + 1):
         tr_loss = train_epoch(
