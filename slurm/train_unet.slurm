@@ -21,7 +21,13 @@
 #
 # Resume after a kill (once checkpoints/last.pt exists):
 #   SBATCH_EXTRA_ARGS='--resume checkpoints/last.pt' sbatch slurm/train_unet.slurm
-# Or edit the python line below.
+#
+# Conda in batch jobs: either set CONDA_ENV to the env *directory* (recommended), e.g.
+#   export CONDA_ENV=$HOME/.conda/envs/brain-tumor-unet
+#   sbatch --chdir="$PWD" slurm/train_unet.slurm
+# or set CONDA_SH to conda.sh then CONDA_ENV to env name, e.g.
+#   export CONDA_SH=$HOME/miniconda3/etc/profile.d/conda.sh
+#   export CONDA_ENV=brain-tumor-unet
 
 set -eo pipefail
 set +u
@@ -42,22 +48,57 @@ echo "[brain_unet] SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-}"
 echo "[brain_unet] PROJECT_ROOT=$PROJECT_ROOT"
 pwd
 
-# Python: conda env path (set before submit or edit here)
-# Example ARC: module load anaconda3 && conda activate /path/to/env
-if [ -n "${CONDA_SH:-}" ] && [ -f "$CONDA_SH" ]; then
-  # shellcheck source=/dev/null
-  source "$CONDA_SH"
-fi
-if [ -n "${CONDA_ENV:-}" ]; then
-  conda activate "$CONDA_ENV"
-elif [ -n "${CONDA_PREFIX:-}" ]; then
-  conda activate "$CONDA_PREFIX"
-fi
-
-# Optional: cluster module (uncomment if needed)
-# module load anaconda3
-
+# Python: SLURM is non-interactive — `conda activate` needs conda.sh first, or use env's python binary.
 export PYTHONUNBUFFERED=1
+
+PYTHON_BIN=""
+
+if [ -n "${CONDA_ENV:-}" ] && [ -x "${CONDA_ENV}/bin/python" ]; then
+  PYTHON_BIN="${CONDA_ENV}/bin/python"
+  echo "[brain_unet] using CONDA_ENV python: $PYTHON_BIN"
+else
+  module load anaconda3 2>/dev/null || true
+
+  _conda_sh="${CONDA_SH:-}"
+  if [ -z "$_conda_sh" ] && [ -n "${CONDA_BASE:-}" ] && [ -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]; then
+    _conda_sh="${CONDA_BASE}/etc/profile.d/conda.sh"
+  fi
+  if [ -z "$_conda_sh" ] && command -v conda >/dev/null 2>&1; then
+    _root="$(conda info --base 2>/dev/null || true)"
+    if [ -n "$_root" ] && [ -f "$_root/etc/profile.d/conda.sh" ]; then
+      _conda_sh="$_root/etc/profile.d/conda.sh"
+    fi
+  fi
+  if [ -z "$_conda_sh" ]; then
+    for _root in "$HOME/miniconda3" "$HOME/anaconda3" "/opt/conda"; do
+      if [ -f "$_root/etc/profile.d/conda.sh" ]; then
+        _conda_sh="$_root/etc/profile.d/conda.sh"
+        break
+      fi
+    done
+  fi
+
+  if [ -n "$_conda_sh" ] && [ -f "$_conda_sh" ]; then
+    # shellcheck source=/dev/null
+    source "$_conda_sh"
+    hash -r 2>/dev/null || true
+  fi
+
+  if [ -n "${CONDA_ENV:-}" ]; then
+    conda activate "$CONDA_ENV"
+  elif [ -n "${CONDA_PREFIX:-}" ]; then
+    conda activate "$CONDA_PREFIX"
+  fi
+
+  PYTHON_BIN="${PYTHON_BIN:-python}"
+fi
+
+if [ -z "$PYTHON_BIN" ]; then
+  PYTHON_BIN="python"
+fi
+
+echo "[brain_unet] python: $(command -v "$PYTHON_BIN" 2>/dev/null || echo "$PYTHON_BIN")"
+"$PYTHON_BIN" -V
 
 # Optional .env (Kaggle, etc.) — not required for training if data is already on disk
 if [ -f ".env" ]; then
@@ -67,6 +108,6 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-python -m src.train --config configs/default.yaml ${SBATCH_EXTRA_ARGS:-}
+"$PYTHON_BIN" -m src.train --config configs/default.yaml ${SBATCH_EXTRA_ARGS:-}
 
 echo "[brain_unet] finished at $(date)"
