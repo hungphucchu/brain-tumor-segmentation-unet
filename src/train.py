@@ -112,6 +112,31 @@ def evaluate_epoch(
     return dice_sum / max(n, 1), iou_sum / max(n, 1)
 
 
+def _save_last_checkpoint(
+    path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.ReduceLROnPlateau,
+    scaler: GradScaler | None,
+    epoch: int,
+    best_dice: float,
+    stale: int,
+    cfg: dict,
+) -> None:
+    payload: dict = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "epoch": epoch,
+        "best_dice": best_dice,
+        "stale": stale,
+        "config": cfg,
+    }
+    if scaler is not None:
+        payload["scaler"] = scaler.state_dict()
+    torch.save(payload, path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train U-Net on LGG-style brain MRI pairs.")
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
@@ -130,6 +155,12 @@ def main() -> None:
         type=Path,
         default=None,
         help="Folder with TIFF pairs (overrides data_root in config). Relative paths use cwd.",
+    )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Resume from last.pt (or another checkpoint) after SLURM kill / OOM. Example: checkpoints/last.pt",
     )
     args = parser.parse_args()
 
@@ -197,13 +228,34 @@ def main() -> None:
     ckpt_dir = repo_root / cfg["checkpoint_dir"]
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     best_path = ckpt_dir / "best.pt"
+    last_path = ckpt_dir / "last.pt"
 
     best_dice = -1.0
     patience = int(cfg.get("early_stopping_patience", 15))
     stale = 0
     epochs = int(cfg["epochs"])
+    start_epoch = 1
 
-    for epoch in range(1, epochs + 1):
+    if args.resume is not None:
+        resume_p = args.resume if args.resume.is_absolute() else repo_root / args.resume
+        if not resume_p.is_file():
+            raise FileNotFoundError(f"--resume file not found: {resume_p}")
+        loaded = torch.load(resume_p, map_location=device, weights_only=False)
+        model.load_state_dict(loaded["model"])
+        optimizer.load_state_dict(loaded["optimizer"])
+        if "scheduler" in loaded:
+            scheduler.load_state_dict(loaded["scheduler"])
+        start_epoch = int(loaded["epoch"]) + 1
+        best_dice = float(loaded.get("best_dice", -1.0))
+        stale = int(loaded.get("stale", 0))
+        if scaler is not None and loaded.get("scaler") is not None:
+            scaler.load_state_dict(loaded["scaler"])
+        print(
+            f"Resuming from {resume_p} at epoch {start_epoch}/{epochs} "
+            f"(best_val_dice so far={best_dice:.4f}, stale={stale})"
+        )
+
+    for epoch in range(start_epoch, epochs + 1):
         tr_loss = train_epoch(
             model, train_loader, optimizer, criterion, device, scaler, use_amp
         )
@@ -229,9 +281,22 @@ def main() -> None:
             )
         else:
             stale += 1
-            if stale >= patience:
-                print(f"Early stopping (no val Dice improvement for {patience} epochs).")
-                break
+
+        _save_last_checkpoint(
+            last_path,
+            model,
+            optimizer,
+            scheduler,
+            scaler,
+            epoch,
+            best_dice,
+            stale,
+            cfg,
+        )
+
+        if stale >= patience:
+            print(f"Early stopping (no val Dice improvement for {patience} epochs).")
+            break
 
     print(f"Best checkpoint: {best_path}  val_dice={best_dice:.4f}")
 

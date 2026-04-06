@@ -44,6 +44,22 @@ pip install -r requirements.txt
 
 NumPy is pinned to **1.x** (`numpy<2`) so it matches common PyTorch wheels and avoids “compiled using NumPy 1.x” / `_ARRAY_API` errors. If you already installed NumPy 2, run `pip install -r requirements.txt` again to downgrade.
 
+## SLURM (HPC)
+
+Example batch script: [slurm/train_unet.slurm](slurm/train_unet.slurm). Adjust `--partition`, `--mem`, and conda activation for your site.
+
+```bash
+mkdir -p logs
+export CONDA_ENV=/path/to/your/brain-tumor-unet   # or conda env name if using named env
+sbatch --chdir="$PWD" slurm/train_unet.slurm
+```
+
+Resume after a time limit / OOM (when `checkpoints/last.pt` exists):
+
+```bash
+SBATCH_EXTRA_ARGS='--resume checkpoints/last.pt' sbatch --chdir="$PWD" slurm/train_unet.slurm
+```
+
 ## Commands
 
 Run from the repository root.
@@ -77,6 +93,14 @@ Run from the repository root.
    **HPC / second machine:** `data/splits/splits.json` stores paths **relative** to `data/raw` so clones stay portable. If you still see `FileNotFoundError` pointing at another computer’s path, regenerate splits on this host: `python -m src.train --config configs/default.yaml --force-splits`.
 
    **CUDA “driver too old”:** Install a PyTorch build that matches the cluster’s CUDA/driver (see [pytorch.org](https://pytorch.org)), or training falls back to CPU if `torch.cuda.is_available()` is false. You can set `amp: false` in `configs/default.yaml` when on CPU.
+
+   **SLURM / HPC (job killed, “CANCELLED”, `Killed`):** Usually **wall time** (`#SBATCH --time=`) ran out or the node **ran out of memory**. Request a **longer** time limit, lower `batch_size` or `num_workers` in `configs/default.yaml`, and/or use a **GPU partition** with enough RAM. After each **finished** epoch the run writes **`checkpoints/last.pt`** (full optimizer/scheduler state). Resume with:
+
+   ```bash
+   python -m src.train --config configs/default.yaml --resume checkpoints/last.pt
+   ```
+
+   If the job died **inside** an epoch before any epoch completed, `last.pt` may not exist yet; shorten an epoch (smaller subset is not built-in) or increase time so at least one epoch finishes.
 
 4. **Evaluate** on test set and save overlay PNGs:
 
