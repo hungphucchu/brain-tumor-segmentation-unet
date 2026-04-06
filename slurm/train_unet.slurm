@@ -3,12 +3,17 @@
 #SBATCH --partition=gpu1v100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --mem=32G
 #SBATCH --time=20:00:00
 #SBATCH --output=logs/slurm_%j.out
 #SBATCH --error=logs/slurm_%j.err
+#
+# If you see "Memory specification can not be satisfied" or "node configuration is not available":
+#   - Do NOT set --mem here unless ARC docs require it (many GPU nodes only allow the partition default).
+#   - Override at submit time:  sbatch --mem=16G --partition=YOUR_GPU_PART slurm/train_unet.slurm
+#   - List partitions:  sinfo -s   or   sinfo -o "%P %G %m %c"
+#   - Match configs/default.yaml num_workers to cpus-per-task (e.g. num_workers: 2–4).
 
 # Train U-Net until epochs finish, early stopping, or time limit.
 # Submit from repo root:  sbatch slurm/train_unet.slurm

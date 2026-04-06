@@ -60,6 +60,8 @@ Resume after a time limit / OOM (when `checkpoints/last.pt` exists):
 SBATCH_EXTRA_ARGS='--resume checkpoints/last.pt' sbatch --chdir="$PWD" slurm/train_unet.slurm
 ```
 
+If SLURM says **memory** or **node configuration** cannot be satisfied, the partition may not allow custom `--mem`, or the partition name may differ. Try submitting **without** extra memory flags (the script omits `--mem` by default), or override: `sbatch --partition=... --chdir="$PWD" slurm/train_unet.slurm`. Use `sinfo` to see valid partitions and defaults.
+
 ## Commands
 
 Run from the repository root.
