@@ -9,3 +9,6 @@ tifffile>=2023.7.0
 tqdm>=4.65.0
 PyYAML>=6.0
 kagglehub>=0.3.0
+Flask>=3.0.0
+requests>=2.31.0
+Pillow>=10.0.0

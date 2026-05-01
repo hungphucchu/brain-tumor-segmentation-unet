@@ -1,129 +1,151 @@
-# Brain tumor segmentation (U-Net)
+# Brain Tumor Segmentation (U-Net)
 
-PyTorch implementation for binary tumor masks on 2D brain MRI slices, following [implementation.md](implementation.md) and the brief in [idea.txt](idea.txt).
+This project trains and evaluates a U-Net model to segment brain tumor regions from MRI slices.
+It uses the LGG MRI Segmentation dataset (`kaggle_3m`) and predicts a binary tumor mask for each image.
 
-## Dataset
+Main outputs:
+- trained checkpoint (`checkpoints/best.pt`)
+- quantitative metrics (Dice, IoU, Precision, Recall)
+- qualitative overlays (`outputs/eval_overlays/`)
+- optional Flask demo for local inference (`python -m src.webapp`)
 
-Use the Kaggle **Brain MRI segmentation** dataset (LGG / TCGA-style TIFF slices):
+Fast local setup for grading and demo.
 
-- [https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segmentation](https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segmentation)
+## 1) Create environment
 
-### Option A — Download with kagglehub (full dataset, no zip)
-
-Configure Kaggle API access (same as the Kaggle CLI): put `kaggle.json` in `~/.kaggle/` or set `KAGGLE_USERNAME` and `KAGGLE_KEY`.
-
-From the repo root:
-
-```bash
-pip install -r requirements.txt
-python -m src.download_dataset
-```
-
-This downloads via `kagglehub`, then adds `data/raw/lgg_mri_kagglehub` as a **symlink** to the cached dataset so `data_root: data/raw` in the config still works.
-
-- `--no-link` — only download and print the path (use with `python -m src.eda --data-root ...`).
-- If symlink fails on Windows, use the printed path with `--data-root`.
-
-### Option B — Manual zip
-
-Unzip so that slice folders live under `data/raw/` (recursive scan is supported). Expected pairing:
-
-- Image: `<name>.tif`
-- Mask: `<name>_mask.tif`  
-  in the same directory (case folders such as `TCGA_*`).
-
-**Split policy:** `data/splits/splits.json` is built with a **case-level** 80% / 10% / 10% split (parent folder name = case ID) and a fixed seed from `configs/default.yaml` so runs are reproducible.
-
-## Setup
+From repo root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-NumPy is pinned to **1.x** (`numpy<2`) so it matches common PyTorch wheels and avoids “compiled using NumPy 1.x” / `_ARRAY_API` errors. If you already installed NumPy 2, run `pip install -r requirements.txt` again to downgrade.
+## 2) Download dataset
 
-## SLURM (HPC)
+Dataset: [LGG MRI Segmentation (kaggle_3m)](https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segmentation)
 
-Example batch script: [slurm/train_unet.slurm](slurm/train_unet.slurm). Adjust `--partition`, `--mem`, and conda activation for your site.
+Set Kaggle credentials (`~/.kaggle/kaggle.json` or env vars), then:
+
+```bash
+python -m src.download_dataset
+```
+
+## 3) Train model
+
+```bash
+python -m src.train --config configs/default.yaml
+```
+
+Output checkpoint:
+- `checkpoints/best.pt`
+
+## 4) Evaluate on test set
+
+```bash
+python -m src.eval --config configs/default.yaml --checkpoint checkpoints/best.pt --split test --max-overlays 20
+```
+
+Output overlays:
+- `outputs/eval_overlays/`
+
+## 5) Run web demo
+
+```bash
+python -m src.webapp
+```
+
+Open:
+- [http://localhost:5002](http://localhost:5002)
+
+Demo supports:
+- file upload
+- image URL
+- local file path
+- local demo-file dropdown
+
+---
+
+## HPC training (SLURM)
+
+Use the provided batch script:
+- `slurm/train_unet.slurm`
+
+### 1) Prepare environment on HPC
+
+Create/install your environment on the cluster first (example):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+### 2) Submit training job
+
+From repo root:
 
 ```bash
 mkdir -p logs
-# Easiest on SLURM (no `conda init`): point to the env *folder* so the script uses that Python directly
+sbatch --chdir="$PWD" slurm/train_unet.slurm
+```
+
+If your site uses a conda env folder, you can set:
+
+```bash
 export CONDA_ENV="$HOME/.conda/envs/brain-tumor-unet"
 sbatch --chdir="$PWD" slurm/train_unet.slurm
 ```
 
-If you only have a **named** env, the script will `source …/conda.sh` then `conda activate` — ensure `module load anaconda3` works on your cluster, or set `CONDA_SH` / `CONDA_BASE` to where `etc/profile.d/conda.sh` lives.
+### 3) Check job status
 
-Resume after a time limit / OOM (when `checkpoints/last.pt` exists):
+```bash
+squeue -u "$USER"
+```
+
+### 4) Resume from last checkpoint (if job stopped)
+
+```bash
+python -m src.train --config configs/default.yaml --resume checkpoints/last.pt
+```
+
+Or with SLURM script override:
 
 ```bash
 SBATCH_EXTRA_ARGS='--resume checkpoints/last.pt' sbatch --chdir="$PWD" slurm/train_unet.slurm
 ```
 
-If SLURM says **memory** or **node configuration** cannot be satisfied, the partition may not allow custom `--mem`, or the partition name may differ. Try submitting **without** extra memory flags (the script omits `--mem` by default), or override: `sbatch --partition=... --chdir="$PWD" slurm/train_unet.slurm`. Use `sinfo` to see valid partitions and defaults.
+Notes:
+- Best model is saved as `checkpoints/best.pt`.
+- If job is slow or OOM, reduce `batch_size` / `num_workers` in `configs/default.yaml`.
 
-## Commands
+---
 
-Run from the repository root.
+## If you want a super quick check (no retraining)
 
-1. **EDA** — verify shapes, dtypes, and a few overlays:
+If `checkpoints/best.pt` already exists:
 
-   ```bash
-   python -m src.eda --config configs/default.yaml
-   ```
+```bash
+python -m src.eval --config configs/default.yaml --checkpoint checkpoints/best.pt --split test --max-overlays 20
+python -m src.webapp
+```
 
-   If the dataset lives outside `data/raw/`, point to the folder that contains the case subdirectories (often `kaggle_3m`):
+---
 
-   ```bash
-   python -m src.eda --config configs/default.yaml --data-root /path/to/kaggle_3m
-   ```
+## Common issues
 
-2. **Prepare splits only** (optional; training also creates splits if missing):
+- **`No module named ...`**  
+  Activate venv and reinstall:
+  ```bash
+  source .venv/bin/activate
+  python -m pip install -r requirements.txt
+  ```
 
-   ```bash
-   python -m src.train --config configs/default.yaml --prepare-splits
-   ```
+- **Dataset not found**  
+  Re-run:
+  ```bash
+  python -m src.download_dataset
+  ```
 
-3. **Train**
-
-   ```bash
-   python -m src.train --config configs/default.yaml
-   ```
-
-   Checkpoints: `checkpoints/best.pt` (best validation Dice).
-
-   **HPC / second machine:** `data/splits/splits.json` stores paths **relative** to `data/raw` so clones stay portable. If you still see `FileNotFoundError` pointing at another computer’s path, regenerate splits on this host: `python -m src.train --config configs/default.yaml --force-splits`.
-
-   **CUDA “driver too old”:** Install a PyTorch build that matches the cluster’s CUDA/driver (see [pytorch.org](https://pytorch.org)), or training falls back to CPU if `torch.cuda.is_available()` is false. You can set `amp: false` in `configs/default.yaml` when on CPU.
-
-   **SLURM / HPC (job killed, “CANCELLED”, `Killed`):** Usually **wall time** (`#SBATCH --time=`) ran out or the node **ran out of memory**. Request a **longer** time limit, lower `batch_size` or `num_workers` in `configs/default.yaml`, and/or use a **GPU partition** with enough RAM. After each **finished** epoch the run writes **`checkpoints/last.pt`** (full optimizer/scheduler state). Resume with:
-
-   ```bash
-   python -m src.train --config configs/default.yaml --resume checkpoints/last.pt
-   ```
-
-   If the job died **inside** an epoch before any epoch completed, `last.pt` may not exist yet; shorten an epoch (smaller subset is not built-in) or increase time so at least one epoch finishes.
-
-4. **Evaluate** on test set and save overlay PNGs:
-
-   ```bash
-   python -m src.eval --config configs/default.yaml --checkpoint checkpoints/best.pt --split test --max-overlays 20
-   ```
-
-   Overlays: `outputs/eval_overlays/`.
-
-## Configuration
-
-Edit [configs/default.yaml](configs/default.yaml) for paths, batch size, learning rate, loss (`bce_dice` or `dice`), mixed precision (`amp`), and early stopping.
-
-## References
-
-- Ronneberger et al., U-Net (2015): [arXiv:1505.04597](https://arxiv.org/abs/1505.04597)
-- Buda et al. (2019), LGG shape features / dataset context: *Computers in Biology and Medicine*
-
-## Note on metrics
-
-Pixel accuracy is **not** emphasized: most voxels are background. Training monitors **validation Dice**; evaluation reports **Dice**, **IoU**, and foreground **precision/recall**.
+- **CPU fallback / no CUDA**  
+  Training still works, just slower.

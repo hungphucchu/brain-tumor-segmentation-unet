@@ -22,11 +22,6 @@ __all__ = [
 
 
 def resolve_pair_paths(image_s: str, mask_s: str, data_root: Path) -> tuple[Path, Path]:
-    """
-    Resolve image/mask paths for training on any machine.
-    - New splits: paths relative to data_root.
-    - Legacy splits: absolute paths from another host → locate by case folder + filename under data_root.
-    """
     data_root = data_root.resolve()
 
     def one(p: Path) -> Path:

@@ -1,16 +1,4 @@
 from __future__ import annotations
-
-"""
-Download the full LGG MRI segmentation dataset via kagglehub (no manual zip).
-
-Requires Kaggle API credentials (same as Kaggle CLI):
-  ~/.kaggle/kaggle.json
-or environment variables KAGGLE_USERNAME and KAGGLE_KEY.
-
-After download, creates data/raw/lgg_mri_kagglehub -> …/kaggle_3m in the cache (symlink) when present,
-so configs/default.yaml data_root: data/raw works without --data-root.
-"""
-
 import argparse
 import sys
 from pathlib import Path

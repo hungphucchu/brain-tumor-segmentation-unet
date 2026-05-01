@@ -1,10 +1,4 @@
 from __future__ import annotations
-
-"""
-TIFF discovery and numpy normalization (no PyTorch).
-Used by EDA and training dataset so `python -m src.eda` does not import torch.
-"""
-
 import os
 from pathlib import Path
 
@@ -12,7 +6,6 @@ import numpy as np
 
 
 def resolve_data_root(repo_root: Path, config_data_root: str, override: Path | None) -> Path:
-    """Dataset root: config path relative to repo, unless --data-root is set (cwd-relative or absolute)."""
     if override is not None:
         p = Path(override)
         if not p.is_absolute():
@@ -22,7 +15,6 @@ def resolve_data_root(repo_root: Path, config_data_root: str, override: Path | N
 
 
 def _iter_files(root: Path) -> list[Path]:
-    """All files under root, following symlinked directories (needed for data/raw -> kagglehub)."""
     root = root.resolve()
     if not root.is_dir():
         return []
@@ -42,11 +34,6 @@ def _mask_stem(path: Path) -> str:
 
 
 def discover_pairs(data_root: Path) -> list[tuple[Path, Path, str]]:
-    """
-    Find (image, mask, case_id) triples. Expects mask files named like
-    `<name>_mask.tif` with matching `<name>.tif` in the same folder (LGG / Kaggle layout).
-    case_id is the parent directory name (e.g. TCGA case folder).
-    """
     data_root = data_root.resolve()
     pairs: list[tuple[Path, Path, str]] = []
     for mask_path in sorted(_iter_files(data_root)):
@@ -111,12 +98,6 @@ def resolve_effective_data_root(
     config_data_root: str,
     override: Path | None,
 ) -> tuple[Path, str]:
-    """
-    Picks the first directory that contains valid pairs.
-    With override, only that path is used.
-    Otherwise tries config data_root, then common kagglehub symlink targets, then kagglehub cache.
-    Returns (path, note) where note explains the choice for logging.
-    """
     primary = resolve_data_root(repo_root, config_data_root, override)
     if override is not None:
         return primary, "from --data-root"

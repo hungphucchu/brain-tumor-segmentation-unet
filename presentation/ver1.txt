@@ -1,0 +1,281 @@
+Project Final Presentation v1
+Title: Brain Tumor Segmentation with U-Net (LGG MRI)
+Total: 15 minutes (12 mins talk + 3 mins QA)
+
+==================================================
+0a) Figures / charts (for slides — easy to follow)
+==================================================
+PNG files live in: presentation/figures/
+
+Regenerate anytime (from repo root):
+  python presentation/generate_figures.py
+  (uses non-interactive matplotlib; needs matplotlib in your venv)
+
+Suggested slide mapping:
+- data_split_counts.png  → Data slide: train / val / test slice counts (pairs).
+- unet_schematic.png      → Model slide: U-shape + skips (conceptual, not layer-exact).
+- test_metrics_bar.png    → Results slide: Dice, IoU, Precision, Sensitivity on test set.
+
+Optional (use existing repo assets — no script):
+- outputs/eda_sample_*.png  → 1 slide: "what LGG MRI + mask looks like".
+- outputs/eval_overlays/overlay_*.png  → 1 slide: input / prediction / GT (run eval with --max-overlays > 0 to create more).
+
+==================================================
+0) Time plan
+==================================================
+Slide 1-2   (1.5 min): Background + motivation
+Slide 3     (1.0 min): Research questions
+Slide 4-5   (2.0 min): Data + preprocessing pipeline
+Slides 5A–5B (1.0 min): Evaluation metrics — (A) Dice/IoU; (B) Precision/Sensitivity
+Slide 6     (1.5 min): Model overview (U-Net)
+Slide 7     (1.0 min): How we trained the model (overview)
+Slide 8-9   (2.0 min): Experiments and quantitative results
+Slide 10    (1.0 min): Qualitative results and demo behavior
+Slide 11    (1.0 min): Observations and insights
+Slide 12    (0.8 min): Limitations and failure analysis
+Slide 13    (0.7 min): Future work
+Slide 14    (backup): References
+QA          (3.0 min)
+
+==================================================
+1) Background and motivation
+==================================================
+- Brain tumor delineation is important for diagnosis and treatment planning.
+- Manual segmentation by radiologists is accurate but time-consuming.
+- Goal: build a reproducible deep learning pipeline for automatic tumor segmentation.
+- Practical goal: train a U-Net on public MRI data and provide a web demo for inference.
+
+Key message:
+"We are solving pixel-level tumor localization, not only tumor/no-tumor classification."
+
+==================================================
+2) Research questions
+==================================================
+RQ1: Can a baseline U-Net trained on LGG MRI produce strong segmentation performance?
+RQ2: What end-to-end pipeline decisions are needed for stable training and reproducibility?
+RQ3: How well does the model generalize to out-of-distribution images (e.g., CT/JPG web images)?
+
+==================================================
+3) Data
+==================================================
+Dataset:
+- LGG MRI Segmentation dataset (kaggle_3m; Mateusz Buda et al.)
+- Image-mask paired data:
+  - image: <name>.tif
+  - mask:  <name>_mask.tif
+- Data size (current split file):
+  - 110 cases total
+  - 7,858 slice pairs total (train 6,266 / val 818 / test 774)
+  - ~1.97 GiB on disk for image+mask files used by splits
+
+Split strategy:
+- Case-level split (train/val/test) to reduce leakage across slices.
+- Config default ratios: train 0.8, val 0.1, test 0.1.
+- Split file generated in data/splits/splits.json.
+
+Why masks are required:
+- Training needs an answer key (which pixels are tumor) so the model can learn.
+- We use the same answer key to score how good the predictions are.
+
+==================================================
+3b-1) SLIDE 5A — Segmentation evaluation: overlap metrics (Dice and IoU)
+==================================================
+Purpose (one line at top of slide):
+- Check whether the model’s tumor outline matches the dataset’s answer key for the same scan slice.
+
+Setup (same slice, two layers):
+- Model output: a map of “tumor here / not tumor here” (often shown as an overlay on the MRI).
+- Reference: the dataset’s map for that slice (how experts labeled the tumor). We compare these two maps.
+
+Dice coefficient (intuition):
+- Picture two colored regions on the same slice: “where the model says tumor” vs “where the dataset says tumor.”
+- Dice answers: how well do those two regions line up? Same place → high score; barely overlap → low score.
+- Why not simple “% of pixels correct”? Almost the whole image is healthy brain. You could mark almost
+  everything as “not tumor,” get a huge accuracy number, and still miss the tumor entirely. Dice looks
+  at the tumor shapes, not the easy background.
+
+Intersection over Union — IoU (intuition):
+- Still two regions: prediction vs truth. Think: (area where they overlap) ÷ (area covered by either one).
+- If the prediction is too big, too small, or shifted, overlap shrinks or the “combined footprint” grows,
+  so the score drops. IoU is a bit stricter than Dice about that kind of mistake.
+
+Speaker note (~20 s):
+- “Both scores measure overlap between our predicted tumor mask and the reference mask; IoU penalizes
+  wrong-sized regions a bit harder.”
+
+==================================================
+3b-2) SLIDE 5B — Segmentation evaluation: precision and sensitivity
+==================================================
+Precision:
+- Of all pixels classified as tumor, what fraction truly are tumor?
+- Low precision → many false positives (prediction extends beyond the real lesion).
+
+Sensitivity (recall):
+- Of all pixels that are truly tumor, what fraction did we classify as tumor?
+- Low sensitivity → false negatives (we under-segment or miss parts of the lesion).
+
+Relationship to Dice / IoU:
+- Dice and IoU summarize overall regional overlap.
+- Precision and sensitivity separate two failure modes: over-prediction vs under-prediction.
+
+Optional detail (footer or if asked):
+- Scores use pixel-wise agreement after a standard decision threshold (0.5 on model probability).
+- Test-set precision and sensitivity: run `python -m src.eval --split test --max-overlays 0`
+  (output line shows `precision=...` and `recall=...`; here recall equals sensitivity for the tumor class).
+
+==================================================
+4) Preprocessing and input pipeline
+==================================================
+Image pipeline:
+- Read TIFF files.
+- Ensure 3 channels (stack/trim if needed).
+- Normalize to [0,1] using robust normalization logic.
+- Resize to 256x256.
+- Optional train augmentation (horizontal flip).
+
+Mask pipeline:
+- Read mask TIFF.
+- Convert to binary (0/1).
+- Resize with nearest-neighbor interpolation.
+
+Model input/output shape:
+- Input tensor: [N, 3, 256, 256]
+- Output tensor: [N, 1, 256, 256] logits
+
+==================================================
+5) Model
+==================================================
+Architecture:
+- U-Net (encoder-decoder with skip connections).
+- Base channels = 64.
+- Final 1x1 conv outputs binary segmentation logits.
+
+Why U-Net:
+- Strong baseline for medical image segmentation.
+- Skip connections preserve fine spatial details.
+- Works well with limited data compared to very large transformer models.
+
+==================================================
+6) Training setup (high-level)
+==================================================
+What training means here (slide — ~30 s):
+- Each training example = MRI slice + reference mask (expert “where is tumor?”).
+- The model outputs a predicted mask for that same slice.
+- Learning = adjust the model so the prediction overlaps the reference (place, shape, size);
+  the loss measures error; Dice/IoU summarize quality on held-out slices.
+
+How we train (slide — plain text, ~30 s):
+- Loss: a score that goes up when the predicted mask disagrees with the reference; training tries to
+  lower it. We mix a pixel-by-pixel term with an overlap-style term so small tumors still count.
+- Optimization: update model weights in small steps (Adam-style) over many epochs so predictions improve.
+- Hardware: training is faster on a GPU when available; on CPU it is the same idea, just slower.
+- Stopping and model pick: watch a held-out validation set; when scores stop improving, stop training
+  early to limit overfitting. Keep the best validation checkpoint as checkpoints/best.pt.
+
+Speaker note:
+- “No need to list resume paths or cluster details on this slide—focus on data in, masks as targets,
+  save the best model.”
+
+==================================================
+7) Experiments and results
+==================================================
+Main run summary:
+- Training converged with early stopping.
+- Best validation Dice: 0.7967.
+- Test metrics: Dice 0.8116, IoU 0.7771, Precision 0.8552, Sensitivity 0.8024.
+
+Takeaway:
+- Strong in-domain performance on LGG MRI slices.
+- Precision > Sensitivity means the model is conservative: fewer false alarms, but it can miss some tumor pixels.
+
+==================================================
+8) Qualitative results and demo observations
+==================================================
+In-domain behavior:
+- On LGG-style MRI slices similar to training data, predictions are generally sensible.
+
+Out-of-domain behavior:
+- CT/JPG web images with overlays/text can fail (empty or incorrect mask).
+- Reason: modality and appearance shift from training distribution.
+
+Demo note:
+- Web app now includes threshold, CLAHE, and min-area controls for exploratory tuning.
+- These can improve visualization but are not a substitute for domain-specific retraining.
+
+==================================================
+9) Observations and insights
+==================================================
+- Data quality and data match matter as much as model choice.
+- U-Net baseline is strong for in-domain MRI slices and gives interpretable mask outputs.
+- Precision > Sensitivity in our test results suggests a conservative model behavior:
+  fewer false alarms, but some tumor pixels are missed.
+- Fast demo controls (threshold/CLAHE/min-area) are useful for explanation and debugging,
+  but robust performance still depends on training data alignment.
+- Biggest practical lesson: if deployment images differ (CT/JPG/web screenshots), retraining or
+  fine-tuning on matching labeled data is more effective than only post-processing tweaks.
+
+==================================================
+10) Limitations
+==================================================
+- Trained primarily on one dataset/domain (LGG MRI style).
+- Limited robustness to different modalities (e.g., CT) and image artifacts.
+- Single-model baseline; no uncertainty calibration shown yet.
+- Clinical validation is out of scope for this class project.
+
+==================================================
+11) Future work
+==================================================
+- Fine-tune on CT-like labeled data for cross-modality robustness.
+- Add stronger augmentations for real-world artifacts (compression, text overlays, intensity shifts).
+- Compare architectures (Attention U-Net, U-Net++, lightweight transformer hybrids).
+- Add calibration and reliability metrics.
+- Package reproducible experiment tracking (config sweeps, automated reports).
+
+==================================================
+12) 3-minute QA prep (likely questions)
+==================================================
+Q1: Why U-Net instead of a newer model?
+A1: U-Net is a proven, interpretable, and compute-efficient baseline for medical segmentation.
+
+Q2: Why does it fail on some web images?
+A2: Domain shift (CT/JPG/overlays) vs MRI TIFF training distribution.
+
+Q3: What is the next most impactful improvement?
+A3: Collect/fine-tune on target-domain labeled data, then evaluate with held-out metrics.
+
+Q4: How reliable are the reported numbers?
+A4: Metrics are from held-out test split on the same dataset family; cross-dataset generalization remains future work.
+
+Q5: What is Precision vs Sensitivity here?
+A5: Precision = “trust the red overlay.” Sensitivity = “don’t miss real tumor.” Both are scored pixel-by-pixel on the test set.
+
+==================================================
+13) Closing statement (last 15 seconds)
+==================================================
+"This project delivers a complete MRI tumor segmentation pipeline with reproducible training,
+solid in-domain Dice/IoU (plus Precision/Sensitivity from eval), and a practical web demo.
+The key lesson is that data-domain alignment matters as much as model architecture for real-world performance."
+
+==================================================
+14) References (backup / final slide)
+==================================================
+- Ronneberger O, Fischer P, Brox T. U-Net: Convolutional Networks for Biomedical Image Segmentation.
+  In: MICCAI 2015. arXiv:1505.04597.
+
+- Buda M, Saha A, Mazurowski MA. Association of genomic subtypes of lower-grade gliomas with shape
+  features automatically extracted by a deep learning algorithm. Computers in Biology and Medicine, 2019.
+  Dataset source used in this project: Kaggle LGG MRI Segmentation (kaggle_3m).
+  https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segmentation
+
+- PyTorch Team. PyTorch: An Imperative Style, High-Performance Deep Learning Library. NeurIPS 2019.
+  https://pytorch.org/
+
+- Dice metric and IoU/Jaccard overlap metrics are standard segmentation evaluation measures used in
+  medical image analysis literature.
+
+==================================================
+Extra credit reminder (peer evaluation)
+==================================================
+- Mention peer voting at end if allowed by instructor:
+  - Winner: +5 extra credit
+  - Runner-up: +3 extra credit

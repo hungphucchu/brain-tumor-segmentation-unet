@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Brain Tumor Predictor</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f7f7fb; }
+    .card { background: #fff; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+    input[type=text], input[type=file], input[type=number], select { width: 100%; margin: .4rem 0 1rem; padding: .55rem; }
+    .inline { display: flex; align-items: center; gap: .5rem; margin: .2rem 0 1rem; }
+    .inline input[type=checkbox] { width: auto; margin: 0; }
+    button { padding: .6rem 1rem; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 1rem; }
+    img { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
+    .ok { color: #166534; font-weight: 700; }
+    .warn { color: #b91c1c; font-weight: 700; }
+    .small { color: #444; font-size: .95rem; }
+  </style>
+</head>
+<body>
+  <h2>Brain MRI Tumor Check (U-Net)</h2>
+  <div class="card">
+    <form method="post" enctype="multipart/form-data">
+      <!-- <label>Upload image (.tif/.tiff/.png/.jpg)</label>
+      <input type="file" name="image_file" accept=".tif,.tiff,.png,.jpg,.jpeg" />
+      <label>or provide image URL</label>
+      <input type="text" name="image_url" placeholder="https://.../image.tif" />
+      <label>or provide local file path</label>
+      <input type="text" name="image_path" placeholder="/absolute/path/to/image.tif" value="{{ controls.image_path }}" /> -->
+      <label>Choose local demo file</label>
+      <select name="demo_path">
+        <option value="">-- Select a local demo file --</option>
+        {% for opt in demo_options %}
+        <option value="{{ opt.value }}" {% if controls.demo_path == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+      <label>Threshold (0.05 - 0.95)</label>
+      <input type="number" name="threshold" min="0.05" max="0.95" step="0.01" value="{{ '%.2f'|format(controls.threshold) }}" />
+      <!-- <label>Min connected area (pixels, 1 - 5000)</label>
+      <input type="number" name="min_area" min="1" max="5000" step="1" value="{{ controls.min_area }}" />
+      <label class="inline">
+        <input type="checkbox" name="use_clahe" {% if controls.use_clahe %}checked{% endif %} />
+        Apply CLAHE contrast enhancement
+      </label> -->
+      <button type="submit">Predict</button>
+    </form>
+    <p class="small">Decision rule: tumor detected if predicted mask has at least {{ min_tumor_pixels }} foreground pixels.</p>
+  </div>
+
+  {% if error %}
+  <div class="card"><p class="warn">{{ error }}</p></div>
+  {% endif %}
+
+  {% if result %}
+  <div class="card">
+    <p>Prediction: <span class="{{ 'warn' if result.has_tumor else 'ok' }}">{{ 'Tumor detected' if result.has_tumor else 'No tumor detected' }}</span></p>
+    <p class="small">Tumor pixels: {{ result.tumor_pixels }} | Ratio: {{ '%.5f'|format(result.tumor_ratio) }}</p>
+    <p class="small">Used settings: threshold={{ '%.2f'|format(result.threshold) }}, min_area={{ result.min_area }}, CLAHE={{ 'on' if result.use_clahe else 'off' }}</p>
+  </div>
+  <div class="grid" style="grid-template-columns: repeat(4, minmax(220px, 1fr));">
+    <div class="card"><p>Input</p><img src="data:image/png;base64,{{ result.input_png }}" /></div>
+    <div class="card"><p>Predicted Mask</p><img src="data:image/png;base64,{{ result.mask_png }}" /></div>
+    <div class="card"><p>Probability Heatmap</p><img src="data:image/png;base64,{{ result.prob_png }}" /></div>
+    <div class="card"><p>Overlay</p><img src="data:image/png;base64,{{ result.overlay_png }}" /></div>
+  </div>
+  {% endif %}
+</body>
+</html>
